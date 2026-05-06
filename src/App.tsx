@@ -127,11 +127,19 @@ export default function App() {
 
       try {
         // 1. Initial fetch - Silent fail to avoid ugly console errors
-        const { data, error } = await supabase
+        let { data, error } = await supabase
           .from('messages')
           .select('*')
           .order('created_at', { ascending: true })
           .limit(50);
+
+        // Retry once if schema cache is stale (PGRST205)
+        if (error && error.code === 'PGRST205') {
+          console.log('Retrying fetch due to schema cache refresh...');
+          const retry = await supabase.from('messages').select('*').order('created_at', { ascending: true }).limit(50);
+          data = retry.data;
+          error = retry.error;
+        }
 
         if (error) {
           // If table is missing, show instructions
@@ -405,19 +413,23 @@ export default function App() {
                     <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-2">SQL para o Editor:</p>
                     <div className="max-h-40 overflow-y-auto scrollbar-hide">
                       <pre id="sql-code" className="text-[10px] text-red-400/90 font-mono leading-relaxed select-all cursor-text whitespace-pre-wrap">
-{`CREATE TABLE messages (
-  id uuid primary key default gen_random_uuid(),
-  "user" text not null,
-  text text not null,
-  created_at timestamptz default now()
+{`-- DELETA A TABELA ANTIGA PARA LIMPAR ERROS
+DROP TABLE IF EXISTS public.messages;
+
+-- CRIA A TABELA NOVA
+CREATE TABLE public.messages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user" text NOT NULL,
+  text text NOT NULL,
+  created_at timestamptz DEFAULT now()
 );
 
-ALTER PUBLICATION supabase_realtime 
-ADD TABLE messages;
+-- ATIVA O REALTIME (MUITO IMPORTANTE)
+ALTER PUBLICATION supabase_realtime ADD TABLE messages;
 
-ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Public Read" ON messages FOR SELECT USING (true);
-CREATE POLICY "Public Insert" ON messages FOR INSERT WITH CHECK (true);`}
+-- LIBERA ACESSO PARA TODOS (RLS)
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public data" ON public.messages FOR ALL USING (true) WITH CHECK (true);`}
                       </pre>
                     </div>
                     <button 
