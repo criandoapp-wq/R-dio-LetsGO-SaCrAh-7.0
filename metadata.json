@@ -1,0 +1,8 @@
+{
+  "name": "Let's Go Listen Radio",
+  "description": "Uma experiência de rádio neon ao vivo com suporte à comunidade e interatividade.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
