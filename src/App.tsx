@@ -38,12 +38,11 @@ interface UserData {
 
 // --- Components ---
 
-const NeonButton = ({ children, onClick, color = "cyan", className = "" }: { children: React.ReactNode; onClick?: () => void; color?: string; className?: string }) => {
+const NeonButton = ({ children, onClick, color = "red", className = "" }: { children: React.ReactNode; onClick?: () => void; color?: string; className?: string }) => {
   const colors: Record<string, string> = {
-    cyan: "border-cyan-400 text-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.5)] hover:shadow-[0_0_25px_rgba(34,211,238,0.8)]",
+    red: "border-red-500 text-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)] hover:shadow-[0_0_25px_rgba(239,68,68,0.8)]",
     pink: "border-pink-500 text-pink-500 shadow-[0_0_15px_rgba(236,72,153,0.5)] hover:shadow-[0_0_25px_rgba(236,72,153,0.8)]",
-    green: "border-emerald-400 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.5)] hover:shadow-[0_0_25px_rgba(52,211,153,0.8)]",
-    red: "border-red-500 text-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)] hover:shadow-[0_0_25px_rgba(239,68,68,0.8)]"
+    green: "border-emerald-400 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.5)] hover:shadow-[0_0_25px_rgba(52,211,153,0.8)]"
   };
 
   return (
@@ -51,7 +50,7 @@ const NeonButton = ({ children, onClick, color = "cyan", className = "" }: { chi
       whileHover={{ scale: 1.05 }}
       whileTap={{ scale: 0.95 }}
       onClick={onClick}
-      className={`px-6 py-3 border-2 rounded-xl font-bold transition-all duration-300 bg-slate-900/50 backdrop-blur-sm ${colors[color] || colors.cyan} ${className}`}
+      className={`px-6 py-3 border-2 rounded-xl font-bold transition-all duration-300 bg-slate-900/50 backdrop-blur-sm ${colors[color] || colors.red} ${className}`}
     >
       {children}
     </motion.button>
@@ -64,6 +63,7 @@ export default function App() {
   const [userData, setUserData] = useState<UserData | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [isTableMissing, setIsTableMissing] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -93,7 +93,11 @@ export default function App() {
         .then(({ data, error }) => {
           if (error) {
             console.error('Supabase fetch error:', error);
+            if (error.code === 'PGRST205') {
+              setIsTableMissing(true);
+            }
           } else {
+            setIsTableMissing(false);
             setMessages(data || []);
             setTimeout(() => {
               chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -182,7 +186,13 @@ export default function App() {
           transition={{ duration: 2, repeat: Infinity }}
           className="bg-red-600 px-4 py-1.5 rounded-full flex items-center gap-2 text-xs font-black uppercase tracking-[0.2em] shadow-[0_0_20px_rgba(220,38,38,0.6)] border border-red-400/30"
         >
-          <div className="w-2 h-2 rounded-full bg-white" />
+          <div className="w-5 h-5 rounded-full bg-white overflow-hidden border border-white/50 flex items-center justify-center shrink-0">
+            <img 
+              src="https://i.ibb.co/v4TrFVSy/20260506-145143-0000.png" 
+              alt="Sensor" 
+              className="w-full h-full object-cover"
+            />
+          </div>
           AO VIVO
         </motion.div>
       </div>
@@ -194,48 +204,44 @@ export default function App() {
           <motion.div 
             animate={{ 
               boxShadow: isPlaying 
-                ? ["0 0 30px #22d3ee", "0 0 80px #22d3ee", "0 0 30px #22d3ee"] 
-                : "0 0 20px rgba(34,211,238,0.2)",
+                ? ["0 0 30px #ef4444", "0 0 80px #ef4444", "0 0 30px #ef4444"] 
+                : "0 0 20px rgba(239,68,68,0.2)",
               scale: isPlaying ? [1, 1.02, 1] : 1
             }}
             transition={{ duration: 3, repeat: Infinity }}
-            className={`w-64 h-64 rounded-full border-4 border-cyan-400 flex items-center justify-center overflow-hidden transition-all duration-700 bg-slate-900/40`}
+            className={`w-64 h-64 rounded-full border-4 border-red-500 flex items-center justify-center overflow-hidden transition-all duration-700 bg-slate-900/40`}
           >
-            {userData?.foto ? (
-              <img src={userData.foto} alt="Profile" className="w-full h-full object-cover" />
-            ) : (
-              <div className="relative w-full h-full flex items-center justify-center">
-                <img 
-                  src="https://i.ibb.co/W8bw18R/imagem.png" 
-                  alt="Radio Logo" 
-                  className="w-full h-full object-cover opacity-80"
-                />
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-cyan-400/40 bg-black/20">
-                  <Radio className="w-16 h-16 mb-2 animate-pulse" />
-                </div>
+            <div className="relative w-full h-full flex items-center justify-center">
+              <img 
+                src="https://i.ibb.co/v4TrFVSy/20260506-145143-0000.png" 
+                alt="Radio Logo" 
+                className="w-full h-full object-cover opacity-80"
+              />
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-red-500/40 bg-black/40">
+                <Radio className="w-16 h-16 mb-2 animate-pulse" />
               </div>
-            )}
+            </div>
           </motion.div>
           {isPlaying && (
             <motion.div 
               animate={{ rotate: 360 }}
               transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-              className="absolute -inset-4 border border-cyan-400/20 rounded-full border-dashed"
+              className="absolute -inset-4 border border-red-500/20 rounded-full border-dashed"
             />
           )}
         </div>
 
         <div className="text-center">
-          <h1 className="text-4xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-cyan-500 mb-1">
+          <h1 className="text-4xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-red-600 mb-1">
             Let's Go Listen
           </h1>
-          <p className="text-cyan-400/70 font-bold uppercase text-[10px] tracking-[0.3em]">A rádio que não para!</p>
+          <p className="text-red-500/70 font-bold uppercase text-[10px] tracking-[0.3em]">A rádio que não para!</p>
         </div>
 
         {/* --- Player Controls --- */}
         <div className="flex items-center gap-10">
           <motion.button 
-            whileHover={{ scale: 1.2, color: '#22d3ee' }} 
+            whileHover={{ scale: 1.2, color: '#ef4444' }} 
             whileTap={{ scale: 0.8 }} 
             className="text-slate-500 transition-colors"
           >
@@ -246,13 +252,13 @@ export default function App() {
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
             onClick={handlePlayPause}
-            className="w-24 h-24 rounded-full bg-cyan-400 flex items-center justify-center text-[#020617] shadow-[0_0_40px_#22d3ee] active:shadow-inner"
+            className="w-24 h-24 rounded-full bg-red-500 flex items-center justify-center text-[#020617] shadow-[0_0_40px_#ef4444] active:shadow-inner"
           >
             {isPlaying ? <Pause size={44} fill="currentColor" /> : <Play size={44} className="translate-x-1" fill="currentColor" />}
           </motion.button>
 
           <motion.button 
-             whileHover={{ scale: 1.2, color: '#22d3ee' }} 
+             whileHover={{ scale: 1.2, color: '#ef4444' }} 
              whileTap={{ scale: 0.8 }} 
              className="text-slate-500 transition-colors"
           >
@@ -262,7 +268,7 @@ export default function App() {
 
         {/* --- Social Links (Neon Buttons) --- */}
         <div className="w-full grid grid-cols-1 gap-4">
-          <NeonButton onClick={() => window.open('https://wa.me/message/3IQTUCLVUNOEF1', '_blank')}>
+          <NeonButton color="red" onClick={() => window.open('https://wa.me/message/3IQTUCLVUNOEF1', '_blank')}>
             WhatsApp
           </NeonButton>
           <NeonButton color="pink" onClick={() => window.open('https://vt.tiktok.com/ZS9NkbfKDPhbw-AyMQH/', '_blank')}>
@@ -280,7 +286,7 @@ export default function App() {
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
           onClick={() => setShowChat(!showChat)}
-          className="w-16 h-16 bg-cyan-400 rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(34,211,238,0.5)] border-2 border-white/20 text-[#020617]"
+          className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(239,68,68,0.5)] border-2 border-white/20 text-[#020617]"
         >
           <MessageSquare fill="currentColor" size={28} />
         </motion.button>
@@ -307,7 +313,7 @@ export default function App() {
             <div className="p-6 border-b border-slate-700/50 flex items-center justify-between">
               <div>
                 <h3 className="text-xl font-black text-white">CHAT AO VIVO</h3>
-                <p className="text-cyan-400 text-[10px] font-bold uppercase tracking-widest">Fale com o locutor</p>
+                <p className="text-red-500 text-[10px] font-bold uppercase tracking-widest">Fale com o locutor</p>
               </div>
               <button onClick={() => setShowChat(false)} className="text-slate-500 hover:text-white transition-colors">
                 <X size={28} />
@@ -321,6 +327,34 @@ export default function App() {
                   <p className="text-sm font-medium">Buscando conexão...</p>
                   <p className="text-[10px] mt-2 opacity-50">Configure o Supabase no painel de segredos para ativar o chat.</p>
                 </div>
+              ) : isTableMissing ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center px-6">
+                  <div className="p-4 bg-amber-500/10 rounded-2xl mb-4">
+                    <X size={32} className="text-amber-500" />
+                  </div>
+                  <p className="text-sm font-black text-white mb-2">TABELA NÃO ENCONTRADA</p>
+                  <p className="text-xs leading-relaxed opacity-70">
+                    Você precisa criar a tabela <span className="text-red-500 font-mono">messages</span> no seu Supabase SQL Editor para o chat funcionar.
+                  </p>
+                  <div className="mt-4 w-full bg-black/40 p-3 rounded-lg text-left overflow-x-auto">
+                    <pre className="text-[9px] text-red-400 font-mono">
+{`CREATE TABLE messages (
+  id uuid primary key default gen_random_uuid(),
+  "user" text,
+  text text,
+  created_at timestamptz default now()
+);
+ALTER PUBLICATION supabase_realtime 
+ADD TABLE messages;`}
+                    </pre>
+                  </div>
+                  <button 
+                    onClick={() => window.location.reload()}
+                    className="mt-6 text-[10px] uppercase font-black tracking-widest text-red-500 border border-red-500/30 px-4 py-2 rounded-full"
+                  >
+                    Tentar Novamente
+                  </button>
+                </div>
               ) : messages.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center px-10">
                   <MessageSquare size={48} className="mb-4 opacity-20" />
@@ -329,7 +363,7 @@ export default function App() {
               ) : (
                 messages.map((msg) => (
                   <div key={msg.id} className="flex flex-col gap-1">
-                    <span className="text-[10px] font-black text-cyan-400 uppercase tracking-wider">{msg.user}</span>
+                    <span className="text-[10px] font-black text-red-500 uppercase tracking-wider">{msg.user}</span>
                     <div className="bg-slate-800/80 p-3 rounded-2xl rounded-tl-none border border-slate-700/50 max-w-[90%]">
                       <p className="text-sm text-slate-200">{msg.text}</p>
                     </div>
@@ -344,14 +378,14 @@ export default function App() {
                 <input 
                   type="text" 
                   placeholder="Sua mensagem..." 
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-5 py-3.5 focus:outline-none focus:border-cyan-400 transition-all text-sm font-medium text-white"
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-5 py-3.5 focus:outline-none focus:border-red-500 transition-all text-sm font-medium text-white"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                 />
                 <button 
                   onClick={handleSendMessage}
-                  className="p-3.5 bg-cyan-400 rounded-2xl text-[#020617] shadow-[0_5px_15px_rgba(34,211,238,0.3)] active:scale-95 transition-transform"
+                  className="p-3.5 bg-red-500 rounded-2xl text-[#020617] shadow-[0_5px_15px_rgba(239,68,68,0.3)] active:scale-95 transition-transform"
                 >
                   <Send size={20} fill="currentColor" />
                 </button>
@@ -413,7 +447,7 @@ function RegistrationModal({ onSave }: { onSave: (data: UserData) => void }) {
         animate={{ scale: 1, opacity: 1, y: 0 }}
         className="w-full max-w-sm bg-slate-900/80 border border-slate-700/50 rounded-[2.5rem] p-10 shadow-2xl relative"
       >
-        <div className="absolute -top-10 left-1/2 -translate-x-1/2 p-4 bg-cyan-400 rounded-3xl shadow-[0_0_30px_#22d3ee]">
+        <div className="absolute -top-10 left-1/2 -translate-x-1/2 p-4 bg-red-500 rounded-3xl shadow-[0_0_30px_#ef4444]">
           <Radio size={32} className="text-[#020617]" />
         </div>
 
@@ -424,12 +458,8 @@ function RegistrationModal({ onSave }: { onSave: (data: UserData) => void }) {
           </div>
           
           <div className="relative group">
-            <div className="w-32 h-32 rounded-full border-2 border-cyan-400/30 flex items-center justify-center bg-slate-800/50 overflow-hidden shadow-inner">
-              {form.foto ? (
-                <img src={form.foto} alt="Preview" className="w-full h-full object-cover" />
-              ) : (
-                <User size={64} className="text-slate-700" />
-              )}
+            <div className="w-32 h-32 rounded-full border-2 border-red-500/30 flex items-center justify-center bg-slate-800/50 overflow-hidden shadow-inner">
+              <User size={64} className="text-slate-700" />
             </div>
             
             <input 
@@ -445,7 +475,7 @@ function RegistrationModal({ onSave }: { onSave: (data: UserData) => void }) {
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
               onClick={() => fileInputRef.current?.click()}
-              className="absolute -bottom-2 -right-2 p-4 bg-cyan-400 rounded-2xl text-[#020617] shadow-[0_8px_20px_rgba(34,211,238,0.4)]"
+              className="absolute -bottom-2 -right-2 p-4 bg-red-500 rounded-2xl text-[#020617] shadow-[0_8px_20px_rgba(239,68,68,0.4)]"
             >
               <Camera size={24} />
             </motion.button>
@@ -456,7 +486,7 @@ function RegistrationModal({ onSave }: { onSave: (data: UserData) => void }) {
               <input 
                 type="text" 
                 placeholder="Nome" 
-                className="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 transition-all font-medium"
+                className="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-6 py-4 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/50 transition-all font-medium"
                 value={form.nome}
                 onChange={e => setForm({...form, nome: e.target.value})}
               />
@@ -464,20 +494,20 @@ function RegistrationModal({ onSave }: { onSave: (data: UserData) => void }) {
             <input 
               type="text" 
               placeholder="Apelido" 
-              className="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400 transition-all font-medium"
+              className="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-6 py-4 focus:outline-none focus:border-red-500 transition-all font-medium"
               value={form.apelido}
               onChange={e => setForm({...form, apelido: e.target.value})}
             />
             <input 
               type="email" 
               placeholder="E-mail" 
-              className="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400 transition-all font-medium"
+              className="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-6 py-4 focus:outline-none focus:border-red-500 transition-all font-medium"
               value={form.email}
               onChange={e => setForm({...form, email: e.target.value})}
             />
           </div>
 
-          <NeonButton className="w-full py-5 text-lg rounded-2xl" onClick={submit}>
+          <NeonButton color="red" className="w-full py-5 text-lg rounded-2xl" onClick={submit}>
             OUVIR AGORA
           </NeonButton>
         </div>
