@@ -38,6 +38,39 @@ interface UserData {
 
 // --- Components ---
 
+const Visualizer = ({ isPlaying }: { isPlaying: boolean }) => {
+  const bars = Array.from({ length: 32 });
+  return (
+    <div className="flex items-end justify-center gap-1.5 h-16 w-full max-w-[240px] mb-6">
+      {bars.map((_, i) => (
+        <motion.div
+          key={i}
+          animate={{
+            height: isPlaying 
+              ? [
+                  `${20 + Math.random() * 80}%`, 
+                  `${20 + Math.random() * 80}%`, 
+                  `${20 + Math.random() * 80}%`
+                ] 
+              : "10%",
+            opacity: isPlaying ? [0.6, 1, 0.6] : 0.3,
+            backgroundColor: isPlaying ? '#ef4444' : '#64748b'
+          }}
+          transition={{
+            duration: 0.3 + Math.random() * 0.4,
+            repeat: Infinity,
+            ease: "easeInOut"
+          }}
+          className="w-1.5 rounded-full shadow-[0_0_10px_rgba(239,68,68,0.3)]"
+          style={{
+            filter: isPlaying ? 'blur(0.5px)' : 'none'
+          }}
+        />
+      ))}
+    </div>
+  );
+};
+
 const NeonButton = ({ children, onClick, color = "red", className = "" }: { children: React.ReactNode; onClick?: () => void; color?: string; className?: string }) => {
   const colors: Record<string, string> = {
     red: "border-red-500 text-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)] hover:shadow-[0_0_25px_rgba(239,68,68,0.8)]",
@@ -69,7 +102,7 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  const STREAM_URL = "https://sa-cr-ah-pu-ls-ar0-7.vercel.app";
+  const STREAM_URL = "https://stream.zeno.fm/8sqw9xpbufvtv";
 
   useEffect(() => {
     const saved = localStorage.getItem("cadastrado");
@@ -83,43 +116,66 @@ export default function App() {
     const supabaseClient = getSupabase();
     let chatChannel: any;
 
-    if (supabaseClient) {
-      // 1. Initial fetch
-      supabaseClient
-        .from('messages')
-        .select('*')
-        .order('created_at', { ascending: true })
-        .limit(50)
-        .then(({ data, error }) => {
-          if (error) {
-            console.error('Supabase fetch error:', error);
-            if (error.code === 'PGRST205') {
-              setIsTableMissing(true);
-            }
-          } else {
-            setIsTableMissing(false);
-            setMessages(data || []);
-            setTimeout(() => {
-              chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, 100);
-          }
-        });
+    const setupChat = async () => {
+      // Clear existing channel if any
+      if (chatChannel) {
+        supabaseClient?.removeChannel(chatChannel);
+      }
 
-      // 2. Real-time subscription
-      chatChannel = supabaseClient
-        .channel('radio_chat_messages')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
-          setMessages(prev => {
-            // Avoid duplicate messages if they arrive quickly
-            if (prev.some(m => m.id === (payload.new as Message).id)) return prev;
-            return [...prev, payload.new as Message];
+      const supabase = getSupabase();
+      if (!supabase) return;
+
+      try {
+        // 1. Initial fetch - Silent fail to avoid ugly console errors
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .order('created_at', { ascending: true })
+          .limit(50);
+
+        if (error) {
+          // If table is missing, show instructions
+          if (error.code === 'PGRST205' || error.message?.toLowerCase().includes('relation "messages" does not exist')) {
+            setIsTableMissing(true);
+          } else {
+            console.warn('Chat standby:', error.message);
+          }
+          return; // STOP HERE - Don't try to subscribe if table is missing
+        }
+
+        setIsTableMissing(false);
+        setMessages(data || []);
+        setTimeout(() => {
+          chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 500);
+
+        // 2. Real-time subscription
+        chatChannel = supabase.channel('radio_chat_messages')
+          .on('postgres_changes', 
+            { event: 'INSERT', schema: 'public', table: 'messages' }, 
+            (payload: any) => {
+              const newMsg = payload.new as Message;
+              setMessages(prev => {
+                if (prev.some(m => m.id === newMsg.id)) return prev;
+                return [...prev, newMsg];
+              });
+              setTimeout(() => {
+                chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+              }, 100);
+            }
+          )
+          .subscribe((status: string) => {
+            if (status === 'CHANNEL_ERROR') {
+              console.warn('Realtime standby - check if table has realtime enabled');
+            }
           });
-          setTimeout(() => {
-            chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-          }, 100);
-        })
-        .subscribe();
-    }
+
+      } catch (err) {
+        // Silent catch for unexpected errors
+      }
+    };
+
+    setupChat();
 
     // Auto-show support popup after 45 seconds
     const timer = setTimeout(() => {
@@ -127,8 +183,8 @@ export default function App() {
     }, 45000);
 
     return () => {
-      if (chatChannel && supabaseClient) {
-        supabaseClient.removeChannel(chatChannel);
+      if (chatChannel) {
+        supabaseClient?.removeChannel(chatChannel);
       }
       clearTimeout(timer);
     };
@@ -146,10 +202,18 @@ export default function App() {
   };
 
   const handleSaveRegistration = (data: UserData) => {
-    localStorage.setItem("cadastrado", "true");
-    localStorage.setItem("userData", JSON.stringify(data));
-    setUserData(data);
-    setIsRegistered(true);
+    try {
+      localStorage.setItem("cadastrado", "true");
+      localStorage.setItem("userData", JSON.stringify(data));
+      setUserData(data);
+      setIsRegistered(true);
+    } catch (e) {
+      console.warn("Storage full, only saving basic data");
+      const subData = { ...data, foto: "" }; // Remove photo if storage is full
+      localStorage.setItem("userData", JSON.stringify(subData));
+      setUserData(subData);
+      setIsRegistered(true);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -231,7 +295,8 @@ export default function App() {
           )}
         </div>
 
-        <div className="text-center">
+        <div className="text-center flex flex-col items-center">
+          <Visualizer isPlaying={isPlaying} />
           <h1 className="text-4xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-red-600 mb-1">
             Let's Go Listen
           </h1>
@@ -332,27 +397,54 @@ export default function App() {
                   <div className="p-4 bg-amber-500/10 rounded-2xl mb-4">
                     <X size={32} className="text-amber-500" />
                   </div>
-                  <p className="text-sm font-black text-white mb-2">TABELA NÃO ENCONTRADA</p>
-                  <p className="text-xs leading-relaxed opacity-70">
-                    Você precisa criar a tabela <span className="text-red-500 font-mono">messages</span> no seu Supabase SQL Editor para o chat funcionar.
+                  <p className="text-sm font-black text-white mb-2">SETUP DO CHAT REQUERIDO</p>
+                  <p className="text-[11px] leading-relaxed opacity-70 mb-4">
+                    Para o chat funcionar, você precisa criar a tabela no seu <span className="text-red-500 font-bold underline">Supabase Dashboard</span>.
                   </p>
-                  <div className="mt-4 w-full bg-black/40 p-3 rounded-lg text-left overflow-x-auto">
-                    <pre className="text-[9px] text-red-400 font-mono">
+                  <div className="mt-4 w-full bg-black/60 p-4 rounded-2xl border border-red-500/20 text-left overflow-hidden relative group">
+                    <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-2">SQL para o Editor:</p>
+                    <div className="max-h-40 overflow-y-auto scrollbar-hide">
+                      <pre id="sql-code" className="text-[10px] text-red-400/90 font-mono leading-relaxed select-all cursor-text whitespace-pre-wrap">
 {`CREATE TABLE messages (
   id uuid primary key default gen_random_uuid(),
-  "user" text,
-  text text,
+  "user" text not null,
+  text text not null,
   created_at timestamptz default now()
 );
+
 ALTER PUBLICATION supabase_realtime 
-ADD TABLE messages;`}
-                    </pre>
+ADD TABLE messages;
+
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public Read" ON messages FOR SELECT USING (true);
+CREATE POLICY "Public Insert" ON messages FOR INSERT WITH CHECK (true);`}
+                      </pre>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        const code = document.getElementById('sql-code')?.innerText;
+                        if (code) {
+                          navigator.clipboard.writeText(code);
+                          alert("Código copiado! Agora cole no SQL Editor do Supabase.");
+                        }
+                      }}
+                      className="mt-3 w-full py-2 bg-red-500/10 border border-red-500/30 rounded-lg text-[10px] text-red-500 font-black uppercase tracking-widest hover:bg-red-500/20 transition-all"
+                    >
+                      Copiar Código SQL
+                    </button>
+                  </div>
+                  <div className="mt-6 space-y-3">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold leading-relaxed text-center">
+                      1. Abra o Supabase<br/>
+                      2. Vá em "SQL Editor"<br/>
+                      3. Cole o código e clique em "Run"
+                    </p>
                   </div>
                   <button 
                     onClick={() => window.location.reload()}
-                    className="mt-6 text-[10px] uppercase font-black tracking-widest text-red-500 border border-red-500/30 px-4 py-2 rounded-full"
+                    className="mt-6 w-full text-[12px] uppercase font-black tracking-widest text-white bg-red-600 hover:bg-red-700 p-4 rounded-2xl shadow-lg transition-all animate-pulse"
                   >
-                    Tentar Novamente
+                    Já executei o código! Recarregar
                   </button>
                 </div>
               ) : messages.length === 0 ? (
@@ -459,7 +551,11 @@ function RegistrationModal({ onSave }: { onSave: (data: UserData) => void }) {
           
           <div className="relative group">
             <div className="w-32 h-32 rounded-full border-2 border-red-500/30 flex items-center justify-center bg-slate-800/50 overflow-hidden shadow-inner">
-              <User size={64} className="text-slate-700" />
+              {form.foto ? (
+                <img src={form.foto} alt="Preview" className="w-full h-full object-cover" />
+              ) : (
+                <User size={64} className="text-slate-700" />
+              )}
             </div>
             
             <input 
@@ -467,7 +563,6 @@ function RegistrationModal({ onSave }: { onSave: (data: UserData) => void }) {
               ref={fileInputRef} 
               className="hidden" 
               accept="image/*" 
-              capture="user" 
               onChange={handleFileChange} 
             />
             
