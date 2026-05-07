@@ -16,7 +16,8 @@ import {
   User,
   X,
   MessageSquare,
-  Send
+  Send,
+  Database
 } from 'lucide-react';
 import { getSupabase } from './lib/supabase';
 
@@ -25,6 +26,7 @@ interface Message {
   id: string;
   user: string;
   text: string;
+  avatar?: string;
   created_at: string;
 }
 
@@ -75,7 +77,8 @@ const NeonButton = ({ children, onClick, color = "red", className = "" }: { chil
   const colors: Record<string, string> = {
     red: "border-red-500 text-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)] hover:shadow-[0_0_25px_rgba(239,68,68,0.8)]",
     pink: "border-pink-500 text-pink-500 shadow-[0_0_15px_rgba(236,72,153,0.5)] hover:shadow-[0_0_25px_rgba(236,72,153,0.8)]",
-    green: "border-emerald-400 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.5)] hover:shadow-[0_0_25px_rgba(52,211,153,0.8)]"
+    green: "border-emerald-400 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.5)] hover:shadow-[0_0_25px_rgba(52,211,153,0.8)]",
+    yellow: "border-yellow-400 text-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.5)] hover:shadow-[0_0_25px_rgba(250,204,21,0.8)]"
   };
 
   return (
@@ -97,10 +100,21 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [isTableMissing, setIsTableMissing] = useState(false);
+  const [isConfigMissing, setIsConfigMissing] = useState(false);
+  const [isLocutor, setIsLocutor] = useState(false);
+  const [isMicActive, setIsMicActive] = useState(false);
+  const [isHostTalking, setIsHostTalking] = useState(false);
+  const [micStream, setMicStream] = useState<MediaStream | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const micAudioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaSourceRef = useRef<MediaSource | null>(null);
+  const sourceBufferRef = useRef<SourceBuffer | null>(null);
+  const audioQueueRef = useRef<Uint8Array[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamChannelRef = useRef<any>(null);
 
   const STREAM_URL = "https://stream.zeno.fm/8sqw9xpbufvtv";
 
@@ -109,7 +123,14 @@ export default function App() {
     if (saved === "true") {
       setIsRegistered(true);
       const data = localStorage.getItem("userData");
-      if (data) setUserData(JSON.parse(data));
+      if (data) {
+        const parsedData = JSON.parse(data);
+        setUserData(parsedData);
+        // Authorize locutor based on email from request metadata or hardcoded for the owner
+        if (parsedData.email === "familysacra60@gmail.com") {
+          setIsLocutor(true);
+        }
+      }
     }
 
     // Fetch initial messages and set up subscription with Supabase
@@ -123,7 +144,11 @@ export default function App() {
       }
 
       const supabase = getSupabase();
-      if (!supabase) return;
+      if (!supabase) {
+        setIsConfigMissing(true);
+        return;
+      }
+      setIsConfigMissing(false);
 
       try {
         // 1. Initial fetch - Silent fail to avoid ugly console errors
@@ -162,6 +187,7 @@ export default function App() {
           .on('postgres_changes', 
             { event: 'INSERT', schema: 'public', table: 'messages' }, 
             (payload: any) => {
+              console.log('New message received via realtime:', payload);
               const newMsg = payload.new as Message;
               setMessages(prev => {
                 if (prev.some(m => m.id === newMsg.id)) return prev;
@@ -173,17 +199,43 @@ export default function App() {
             }
           )
           .subscribe((status: string) => {
+            console.log('Realtime status:', status);
             if (status === 'CHANNEL_ERROR') {
               console.warn('Realtime standby - check if table has realtime enabled');
             }
           });
 
       } catch (err) {
-        // Silent catch for unexpected errors
+        console.error('Chat setup exception:', err);
       }
     };
 
     setupChat();
+
+    // --- Audio Streaming Setup ---
+    const supabase = getSupabase();
+    if (supabase) {
+      const channel = supabase.channel('radio_voice_stream')
+        .on('broadcast', { event: 'voice_chunk' }, (payload: any) => {
+          handleIncomingVoiceChunk(payload.payload.chunk);
+        })
+        .on('broadcast', { event: 'locutor_started' }, () => {
+          setIsHostTalking(true);
+          // Duck the music stream when locutor starts
+          if (audioRef.current) audioRef.current.volume = 0.2;
+        })
+        .on('broadcast', { event: 'locutor_stopped' }, () => {
+          setIsHostTalking(false);
+          // Restore volume
+          if (audioRef.current) audioRef.current.volume = 1.0;
+        })
+        .subscribe();
+      
+      streamChannelRef.current = channel;
+    }
+
+    // Prepare MediaSource for voice playback
+    setupMediaSource();
 
     // Auto-show support popup after 45 seconds
     const timer = setTimeout(() => {
@@ -194,9 +246,120 @@ export default function App() {
       if (chatChannel) {
         supabaseClient?.removeChannel(chatChannel);
       }
+      if (streamChannelRef.current) {
+        supabaseClient?.removeChannel(streamChannelRef.current);
+      }
       clearTimeout(timer);
     };
   }, []);
+
+  const setupMediaSource = () => {
+    if (!('MediaSource' in window)) return;
+    
+    const ms = new MediaSource();
+    mediaSourceRef.current = ms;
+    
+    if (micAudioRef.current) {
+      micAudioRef.current.src = URL.createObjectURL(ms);
+    }
+
+    ms.addEventListener('sourceopen', () => {
+      try {
+        // Higher probability of webm support
+        const mime = 'audio/webm; codecs="opus"';
+        if (MediaSource.isTypeSupported(mime)) {
+          const sb = ms.addSourceBuffer(mime);
+          sourceBufferRef.current = sb;
+          sb.mode = 'sequence';
+          
+          sb.addEventListener('updateend', () => {
+            if (audioQueueRef.current.length > 0 && !sb.updating) {
+              const next = audioQueueRef.current.shift();
+              if (next) sb.appendBuffer(next);
+            }
+          });
+        }
+      } catch (e) {
+        console.error("MediaSource error:", e);
+      }
+    });
+  };
+
+  const handleIncomingVoiceChunk = async (base64Chunk: string) => {
+    const binary = atob(base64Chunk);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    if (sourceBufferRef.current && !sourceBufferRef.current.updating) {
+      try {
+        sourceBufferRef.current.appendBuffer(bytes);
+        if (micAudioRef.current && micAudioRef.current.paused) {
+          micAudioRef.current.play().catch(e => console.log("Voice play error:", e));
+        }
+      } catch (e) {
+        audioQueueRef.current.push(bytes);
+      }
+    } else {
+      audioQueueRef.current.push(bytes);
+    }
+  };
+
+  const toggleMic = async () => {
+    if (isMicActive) {
+      // STOP RECORDING
+      if (recorderRef.current) {
+        recorderRef.current.stop();
+        recorderRef.current = null;
+      }
+      if (micStream) {
+        micStream.getTracks().forEach(track => track.stop());
+        setMicStream(null);
+      }
+      setIsMicActive(false);
+      streamChannelRef.current?.send({
+        type: 'broadcast',
+        event: 'locutor_stopped'
+      });
+    } else {
+      // START RECORDING
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setMicStream(stream);
+        
+        const recorder = new MediaRecorder(stream, { 
+          mimeType: 'audio/webm; codecs=opus' 
+        });
+        
+        recorderRef.current = recorder;
+        recorder.ondataavailable = async (e) => {
+          if (e.data.size > 0) {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const base64 = (reader.result as string).split(',')[1];
+              streamChannelRef.current?.send({
+                type: 'broadcast',
+                event: 'voice_chunk',
+                payload: { chunk: base64 }
+              });
+            };
+            reader.readAsDataURL(e.data);
+          }
+        };
+
+        recorder.start(1000); // 1-second chunks for low latency
+        setIsMicActive(true);
+        streamChannelRef.current?.send({
+          type: 'broadcast',
+          event: 'locutor_started'
+        });
+      } catch (err) {
+        console.error("Mic access denied:", err);
+        alert("Erro ao acessar o microfone. Verifique as permissões.");
+      }
+    }
+  };
 
   const handlePlayPause = () => {
     if (audioRef.current) {
@@ -239,9 +402,14 @@ export default function App() {
     try {
       const { error } = await supabase.from('messages').insert({
         user: userData.apelido || userData.nome,
+        avatar: userData.foto,
         text: text,
       });
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase insert error details:', error);
+        alert(`Erro ao enviar: ${error.message}`);
+        throw error;
+      };
     } catch (error) {
       console.error('Supabase send error:', error);
     }
@@ -250,13 +418,30 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#020617] text-slate-100 font-sans overflow-x-hidden">
       <audio ref={audioRef} src={STREAM_URL} crossOrigin="anonymous" />
+      <audio ref={micAudioRef} autoPlay />
 
       {/* --- Header / Live Badge --- */}
       <div className="pt-10 flex flex-col items-center">
+        {isLocutor && (
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={toggleMic}
+            className={`mb-6 flex items-center gap-3 px-6 py-3 rounded-2xl font-black uppercase tracking-widest text-xs transition-all shadow-xl ${
+              isMicActive 
+                ? 'bg-red-600 border-2 border-white/50 text-white animate-pulse' 
+                : 'bg-slate-800 border-2 border-slate-700 text-slate-400'
+            }`}
+          >
+            <div className={`w-3 h-3 rounded-full ${isMicActive ? 'bg-white shadow-[0_0_10px_white]' : 'bg-slate-600'}`} />
+            {isMicActive ? 'MIC ATIVADO - VOCÊ ESTÁ NO AR' : 'ATIVAR MICROFONE (PAINEL)'}
+          </motion.button>
+        )}
+
         <motion.div 
           animate={{ opacity: [1, 0.4, 1] }}
           transition={{ duration: 2, repeat: Infinity }}
-          className="bg-red-600 px-4 py-1.5 rounded-full flex items-center gap-2 text-xs font-black uppercase tracking-[0.2em] shadow-[0_0_20px_rgba(220,38,38,0.6)] border border-red-400/30"
+          className={`${isHostTalking ? 'bg-emerald-500 shadow-[0_0_20px_#10b981]' : 'bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.6)]'} px-4 py-1.5 rounded-full flex items-center gap-2 text-xs font-black uppercase tracking-[0.2em] border border-white/10 transition-colors`}
         >
           <div className="w-5 h-5 rounded-full bg-white overflow-hidden border border-white/50 flex items-center justify-center shrink-0">
             <img 
@@ -265,7 +450,7 @@ export default function App() {
               className="w-full h-full object-cover"
             />
           </div>
-          AO VIVO
+          {isHostTalking ? 'LOCUTOR FALANDO' : 'AO VIVO'}
         </motion.div>
       </div>
 
@@ -341,13 +526,13 @@ export default function App() {
 
         {/* --- Social Links (Neon Buttons) --- */}
         <div className="w-full grid grid-cols-1 gap-4">
-          <NeonButton color="red" onClick={() => window.open('https://wa.me/message/3IQTUCLVUNOEF1', '_blank')}>
+          <NeonButton color="green" onClick={() => window.open('https://wa.me/message/3IQTUCLVUNOEF1', '_blank')}>
             WhatsApp
           </NeonButton>
           <NeonButton color="pink" onClick={() => window.open('https://vt.tiktok.com/ZS9NkbfKDPhbw-AyMQH/', '_blank')}>
             TikTok
           </NeonButton>
-          <NeonButton color="green" onClick={() => window.open('https://meli.la/1gjezpb', '_blank')}>
+          <NeonButton color="yellow" onClick={() => window.open('https://meli.la/1gjezpb', '_blank')}>
             Mercado Livre
           </NeonButton>
         </div>
@@ -394,11 +579,41 @@ export default function App() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {!getSupabase() ? (
-                <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center px-10">
-                  <MessageSquare size={48} className="mb-4 opacity-20" />
-                  <p className="text-sm font-medium">Buscando conexão...</p>
-                  <p className="text-[10px] mt-2 opacity-50">Configure o Supabase no painel de segredos para ativar o chat.</p>
+              {isConfigMissing ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center px-8">
+                  <div className="p-4 bg-red-500/10 rounded-2xl mb-4">
+                    <Database size={32} className="text-red-500" />
+                  </div>
+                  <p className="text-sm font-black text-white mb-2">CONEXÃO NÃO CONFIGURADA</p>
+                  <p className="text-[11px] leading-relaxed opacity-70 mb-6">
+                    Você ainda não adicionou as chaves do Supabase no painel de <span className="text-red-500 font-bold uppercase underline">Secrets</span> (Configurações).
+                  </p>
+                  <div className="w-full space-y-3 text-left">
+                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+                      <p className="text-[10px] text-slate-500 font-bold mb-2">Siga estes passos:</p>
+                      <ol className="text-[10px] space-y-2 text-slate-300">
+                        <li>1. Vá no menu do <strong>AI Studio</strong></li>
+                        <li>2. Clique em <strong>Settings</strong> ou <strong>Secrets</strong></li>
+                        <li>3. Adicione estas duas variáveis:</li>
+                      </ol>
+                      <div className="mt-4 space-y-2 font-mono text-[9px]">
+                        <div className="flex justify-between items-center p-2 bg-black/40 rounded border border-white/5">
+                          <code className="text-red-400">VITE_SUPABASE_URL</code>
+                          <button onClick={() => navigator.clipboard.writeText('VITE_SUPABASE_URL')} className="text-[8px] opacity-40 hover:opacity-100">COPIAR</button>
+                        </div>
+                        <div className="flex justify-between items-center p-2 bg-black/40 rounded border border-white/5">
+                          <code className="text-red-400">VITE_SUPABASE_ANON_KEY</code>
+                          <button onClick={() => navigator.clipboard.writeText('VITE_SUPABASE_ANON_KEY')} className="text-[8px] opacity-40 hover:opacity-100">COPIAR</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => window.location.reload()}
+                    className="mt-6 w-full text-[11px] font-black tracking-widest text-white bg-slate-800 p-4 rounded-2xl hover:bg-slate-700 transition-all"
+                  >
+                    RECARREGAR APP
+                  </button>
                 </div>
               ) : isTableMissing ? (
                 <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center px-6">
@@ -413,23 +628,30 @@ export default function App() {
                     <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-2">SQL para o Editor:</p>
                     <div className="max-h-40 overflow-y-auto scrollbar-hide">
                       <pre id="sql-code" className="text-[10px] text-red-400/90 font-mono leading-relaxed select-all cursor-text whitespace-pre-wrap">
-{`-- DELETA A TABELA ANTIGA PARA LIMPAR ERROS
+{`-- 1. LIMPEZA TOTAL (OPCIONAL)
 DROP TABLE IF EXISTS public.messages;
 
--- CRIA A TABELA NOVA
+-- 2. CRIAÇÃO DA TABELA
 CREATE TABLE public.messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "user" text NOT NULL,
+  avatar text,
   text text NOT NULL,
   created_at timestamptz DEFAULT now()
 );
 
--- ATIVA O REALTIME (MUITO IMPORTANTE)
-ALTER PUBLICATION supabase_realtime ADD TABLE messages;
-
--- LIBERA ACESSO PARA TODOS (RLS)
+-- 3. PERMISSÕES ACESSO (RLS)
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Public data" ON public.messages FOR ALL USING (true) WITH CHECK (true);`}
+CREATE POLICY "Acesso Publico" ON public.messages FOR ALL USING (true) WITH CHECK (true);
+
+-- 4. ATIVAÇÃO DO REALTIME
+BEGIN;
+  DROP PUBLICATION IF EXISTS supabase_realtime;
+  CREATE PUBLICATION supabase_realtime FOR TABLE public.messages;
+COMMIT;
+
+-- 5. RECARREGAR CACHE DO SUPABASE
+NOTIFY pgrst, 'reload schema';`}
                       </pre>
                     </div>
                     <button 
@@ -466,10 +688,21 @@ CREATE POLICY "Public data" ON public.messages FOR ALL USING (true) WITH CHECK (
                 </div>
               ) : (
                 messages.map((msg) => (
-                  <div key={msg.id} className="flex flex-col gap-1">
-                    <span className="text-[10px] font-black text-red-500 uppercase tracking-wider">{msg.user}</span>
-                    <div className="bg-slate-800/80 p-3 rounded-2xl rounded-tl-none border border-slate-700/50 max-w-[90%]">
-                      <p className="text-sm text-slate-200">{msg.text}</p>
+                  <div key={msg.id} className="flex gap-3 items-start">
+                    <div className="w-8 h-8 rounded-full border border-red-500/30 overflow-hidden bg-slate-800 shrink-0 mt-1 shadow-[0_0_10px_rgba(239,68,68,0.1)]">
+                      {msg.avatar ? (
+                        <img src={msg.avatar} alt={msg.user} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-slate-700 text-[10px] font-black text-slate-400">
+                          {msg.user.substring(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1 flex-1">
+                      <span className="text-[10px] font-black text-red-500 uppercase tracking-wider">{msg.user}</span>
+                      <div className="bg-slate-800/80 p-3 rounded-2xl rounded-tl-none border border-slate-700/50 max-w-full">
+                        <p className="text-sm text-slate-200">{msg.text}</p>
+                      </div>
                     </div>
                   </div>
                 ))
